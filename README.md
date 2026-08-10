@@ -12,7 +12,7 @@ Uses GNOME Remote Desktop's extend mode + ADB reverse tunneling to create a virt
 - **Real-time log** — see exactly what's happening at each step
 - **System tray** — minimize to tray, quick connect/disconnect
 - **Terminal theme** — green-on-black aesthetic with info tooltips
-- **Credentials in UI** — editable RDP username/password with defaults
+- **Credentials in UI** — set your own RDP username/password, saved between sessions
 
 ## How It Works
 
@@ -84,16 +84,21 @@ Download `usb-desktop-extend` from [Releases](https://github.com/kachapman/linux
    usb-desktop-extend
    ```
 3. Enter your sudo password when prompted
-4. Click **START CONNECTION**
-5. On your tablet, open an RDP client and connect to:
+4. Enter your desired RDP username and password in the app (these are the credentials your tablet will use to connect)
+5. Click **START CONNECTION**
+6. On your tablet, open an RDP client and connect to:
    - **PC Name:** `127.0.0.1`
    - **Port:** `3389`
-   - **Username:** (set in the app)
-   - **Password:** (set in the app)
-6. Accept the certificate warning on first connect
-7. Drag windows to the tablet — it's your second screen!
+   - **Username:** (the same username you entered in the app)
+   - **Password:** (the same password you entered in the app)
+7. Accept the certificate warning on first connect
+8. Drag windows to the tablet — it's your second screen!
+
+The credentials you enter in the app are set as your GNOME RDP credentials and used by the tablet to authenticate.
 
 Credentials are saved to `~/.config/usb-desktop-extend/config.json` after the first successful connection.
+
+> **Note:** The app automatically enables GNOME Desktop Sharing via `grdctl rdp enable`. You can also manually configure sharing in **GNOME Settings → Sharing**, but this is not required — the app handles it for you.
 
 ### Disconnecting
 
