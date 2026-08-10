@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=USB Desktop Extend
+GenericName=USB Desktop Extend
+Comment=Turn your Android tablet into a second monitor over USB
+Exec=usb-desktop-extend
+Icon=usb-desktop-extend
+Terminal=false
+Categories=Utility;
+Keywords=tablet;monitor;extend;display;adb;rdp;
