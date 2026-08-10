@@ -1,11 +1,12 @@
 """Main application window with system tray integration."""
 
+import json
 import logging
 from datetime import datetime
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, pyqtSlot
-from PyQt6.QtGui import QCursor, QFont, QIcon
+from PyQt6.QtGui import QCursor, QIcon
 from PyQt6.QtWidgets import (
     QApplication,
     QFrame,
@@ -28,6 +29,8 @@ from .log_handler import LogEmitter, QtLogHandler
 logger = logging.getLogger(__name__)
 
 ASSETS_DIR = Path(__file__).parent.parent / "assets"
+CONFIG_DIR = Path.home() / ".config" / "usb-desktop-extend"
+CONFIG_FILE = CONFIG_DIR / "config.json"
 
 # ── Terminal Theme Colors ──────────────────────────────────────────
 C = {
@@ -200,6 +203,26 @@ STATUS_COLORS = {
 }
 
 
+def load_credentials() -> tuple[str, str]:
+    """Load saved credentials from config file."""
+    if CONFIG_FILE.exists():
+        try:
+            data = json.loads(CONFIG_FILE.read_text())
+            return data.get("username", ""), data.get("password", "")
+        except (json.JSONDecodeError, KeyError):
+            pass
+    return "", ""
+
+
+def save_credentials(username: str, password: str):
+    """Save credentials to config file."""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    CONFIG_FILE.write_text(json.dumps({
+        "username": username,
+        "password": password,
+    }, indent=2))
+
+
 class InfoIcon(QLabel):
     """Small clickable info icon that shows a tooltip on hover."""
 
@@ -260,6 +283,9 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(540, 460)
         self.setWindowIcon(self._get_icon())
 
+        # Load saved credentials
+        saved_user, saved_pass = load_credentials()
+
         central = QWidget()
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
@@ -286,7 +312,7 @@ class MainWindow(QMainWindow):
         creds_header.addWidget(creds_title)
         creds_header.addWidget(InfoIcon(
             "RDP credentials used by the tablet to connect.\n"
-            "Defaults work with the companion setup script."
+            "Saved to ~/.config/usb-desktop-extend/config.json"
         ))
         creds_header.addStretch()
         creds_layout.addLayout(creds_header)
@@ -295,7 +321,7 @@ class MainWindow(QMainWindow):
         user_label = QLabel("Username:")
         user_label.setFixedWidth(80)
         user_row.addWidget(user_label)
-        self._username_input = QLineEdit("tablet")
+        self._username_input = QLineEdit(saved_user)
         self._username_input.setPlaceholderText("RDP username")
         user_row.addWidget(self._username_input)
         creds_layout.addLayout(user_row)
@@ -304,7 +330,7 @@ class MainWindow(QMainWindow):
         pass_label = QLabel("Password:")
         pass_label.setFixedWidth(80)
         pass_row.addWidget(pass_label)
-        self._password_input = QLineEdit("UprightSubwayGogglesZucchiniAsparagus")
+        self._password_input = QLineEdit(saved_pass)
         self._password_input.setPlaceholderText("RDP password")
         self._password_input.setEchoMode(QLineEdit.EchoMode.Password)
         pass_row.addWidget(self._password_input)
@@ -493,6 +519,9 @@ class MainWindow(QMainWindow):
                 f'<span style="color: {C["amber"]};">Please enter both username and password.</span>'
             )
             return
+
+        # Save credentials for next launch
+        save_credentials(username, password)
 
         self._set_buttons_enabled(connected=False)
         self._adb_indicator.set_status("connecting")

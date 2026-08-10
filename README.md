@@ -88,10 +88,12 @@ Download `usb-desktop-extend` from [Releases](https://github.com/kachapman/linux
 5. On your tablet, open an RDP client and connect to:
    - **PC Name:** `127.0.0.1`
    - **Port:** `3389`
-   - **Username:** `tablet`
-   - **Password:** `UprightSubwayGogglesZucchiniAsparagus`
+   - **Username:** (set in the app)
+   - **Password:** (set in the app)
 6. Accept the certificate warning on first connect
 7. Drag windows to the tablet — it's your second screen!
+
+Credentials are saved to `~/.config/usb-desktop-extend/config.json` after the first successful connection.
 
 ### Disconnecting
 
