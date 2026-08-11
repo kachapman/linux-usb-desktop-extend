@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 
 RDP_PORT = 3389
 POLL_INTERVAL = 2
+HEALTH_CHECK_INTERVAL = 10
 
 
 class ConnectionManager(QThread):
@@ -18,6 +19,7 @@ class ConnectionManager(QThread):
     log_message = pyqtSignal(str, str)  # (level, message)
     status_changed = pyqtSignal(dict)   # {"adb": bool, "rdp": bool, "tunnel": bool}
     finished = pyqtSignal(bool)         # success
+    connection_lost = pyqtSignal(str)   # reason
 
     def __init__(self, username: str, password: str, sudo_password: str):
         super().__init__()
@@ -83,12 +85,13 @@ class ConnectionManager(QThread):
         return proc.returncode, "\n".join(output_lines)
 
     def run(self):
-        """Execute the full connection sequence."""
+        """Execute the full connection sequence, then monitor."""
         try:
             self._log("info", "=== Starting USB Desktop Extend Connection ===")
             self._connect()
             self._log("success", "=== Connection Established Successfully ===")
             self.finished.emit(True)
+            self._monitor()
         except Exception as e:
             self._log("error", f"Connection failed: {e}")
             self.finished.emit(False)
@@ -124,6 +127,15 @@ class ConnectionManager(QThread):
         self._log("info", "[4/4] Setting up ADB reverse tunnel...")
         self._setup_adb_tunnel()
         self.status_changed.emit({"adb": True, "rdp": True, "tunnel": True})
+
+        # Step 5: Verify actual connectivity
+        self._log("info", "[5/5] Verifying RDP connectivity...")
+        if not self._verify_rdp_connectivity():
+            self._log("warning", "  RDP connectivity check failed, attempting restart...")
+            self._restart_grd_service()
+            time.sleep(3)
+            if not self._verify_rdp_connectivity():
+                self._log("warning", "  RDP still not responding after restart")
 
     def _detect_tablet(self) -> str | None:
         """Poll adb devices for a connected tablet."""
@@ -215,6 +227,172 @@ class ConnectionManager(QThread):
             self._log("success", f"  Tunnel established: tablet 127.0.0.1:{RDP_PORT} -> laptop :{RDP_PORT}")
         else:
             raise RuntimeError("Failed to verify ADB tunnel")
+
+    def _verify_rdp_connectivity(self) -> bool:
+        """Verify RDP port is actually accepting connections."""
+        try:
+            result = subprocess.run(
+                ["nc", "-z", "127.0.0.1", str(RDP_PORT)],
+                capture_output=True, timeout=5,
+            )
+            if result.returncode == 0:
+                self._log("success", f"  RDP port {RDP_PORT} is accepting connections")
+                return True
+            else:
+                self._log("warning", f"  RDP port {RDP_PORT} is not accepting connections")
+                return False
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            self._log("warning", "  RDP connectivity check skipped (nc not available)")
+            return True  # Assume OK if we can't check
+
+    def _restart_grd_service(self):
+        """Restart gnome-remote-desktop service."""
+        self._log("info", "  Restarting gnome-remote-desktop service...")
+        try:
+            self._run_cmd(["systemctl", "--user", "restart", "gnome-remote-desktop"])
+            time.sleep(2)
+            self._log("success", "  gnome-remote-desktop restarted")
+        except Exception as e:
+            self._log("warning", f"  Failed to restart gnome-remote-desktop: {e}")
+
+    def _check_health(self) -> dict:
+        """Check health of all connection components."""
+        health = {"adb": False, "tunnel": False, "rdp": False}
+
+        # Check ADB device
+        tablet = self._detect_tablet()
+        if tablet:
+            health["adb"] = True
+
+        # Check tunnel
+        try:
+            result = subprocess.run(
+                ["adb", "reverse", "--list"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if f"tcp:{RDP_PORT}" in result.stdout:
+                health["tunnel"] = True
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass
+
+        # Check RDP port
+        try:
+            result = subprocess.run(
+                ["ss", "-tlnp"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if f":{RDP_PORT}" in result.stdout:
+                health["rdp"] = True
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass
+
+        return health
+
+    def _monitor(self):
+        """Monitor connection health after successful setup."""
+        self._log("info", "=== Monitoring connection (health check every 10s) ===")
+        consecutive_failures = 0
+
+        while not self._stop_requested:
+            time.sleep(HEALTH_CHECK_INTERVAL)
+
+            if self._stop_requested:
+                break
+
+            health = self._check_health()
+
+            # Log state changes
+            if not health["adb"]:
+                self._log("warning", "Health check: tablet disconnected")
+            if not health["tunnel"]:
+                self._log("warning", "Health check: ADB tunnel broken")
+            if not health["rdp"]:
+                self._log("warning", "Health check: RDP port not listening")
+
+            self.status_changed.emit(health)
+
+            # If everything is fine, reset failure counter
+            if health["adb"] and health["tunnel"] and health["rdp"]:
+                consecutive_failures = 0
+                continue
+
+            consecutive_failures += 1
+
+            # Try to reconnect once
+            if consecutive_failures == 1:
+                self._log("info", "Attempting automatic reconnection...")
+                if self._reconnect():
+                    self._log("success", "Reconnection successful")
+                    consecutive_failures = 0
+                    continue
+
+            # If reconnection failed or we've already retried, give up
+            if consecutive_failures >= 2:
+                reason = self._get_failure_reason(health)
+                self._log("error", f"Connection lost: {reason}")
+                self.connection_lost.emit(reason)
+                break
+
+    def _reconnect(self) -> bool:
+        """Attempt to reconnect after failure."""
+        try:
+            # Check if tablet is still connected
+            if not self._detect_tablet():
+                self._log("warning", "  Tablet not found, cannot reconnect")
+                return False
+
+            # Restart gnome-remote-desktop if RDP port is down
+            health = self._check_health()
+            if not health["rdp"]:
+                self._restart_grd_service()
+                time.sleep(3)
+
+            # Re-establish ADB tunnel if broken
+            if not health["tunnel"]:
+                self._log("info", "  Re-establishing ADB tunnel...")
+                try:
+                    subprocess.run(
+                        ["adb", "reverse", "--remove-all"],
+                        capture_output=True, timeout=5,
+                    )
+                except Exception:
+                    pass
+
+                try:
+                    result = subprocess.run(
+                        ["adb", "reverse", f"tcp:{RDP_PORT}", f"tcp:{RDP_PORT}"],
+                        capture_output=True, text=True, timeout=10,
+                    )
+                    if result.returncode != 0:
+                        self._log("warning", f"  Failed to create tunnel: {result.stderr}")
+                        return False
+                except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+                    self._log("warning", f"  Failed to create tunnel: {e}")
+                    return False
+
+            # Verify everything is working now
+            time.sleep(2)
+            final_health = self._check_health()
+            if final_health["adb"] and final_health["tunnel"] and final_health["rdp"]:
+                return True
+
+            self._log("warning", "  Reconnection incomplete")
+            return False
+
+        except Exception as e:
+            self._log("warning", f"  Reconnection error: {e}")
+            return False
+
+    def _get_failure_reason(self, health: dict) -> str:
+        """Generate a human-readable failure reason."""
+        reasons = []
+        if not health["adb"]:
+            reasons.append("tablet disconnected")
+        if not health["tunnel"]:
+            reasons.append("ADB tunnel broken")
+        if not health["rdp"]:
+            reasons.append("RDP service not running")
+        return "; ".join(reasons) if reasons else "unknown error"
 
     def disconnect(self):
         """Tear down the connection."""

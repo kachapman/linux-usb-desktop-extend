@@ -15,10 +15,12 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMenu,
+    QMessageBox,
     QPushButton,
     QSizePolicy,
     QSystemTrayIcon,
     QTextEdit,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -274,6 +276,7 @@ class MainWindow(QMainWindow):
         self._connected = False
 
         self.setStyleSheet(STYLESHEET)
+        QToolTip.setShowDelay(100)
         self._setup_ui()
         self._setup_tray()
         self._setup_logging()
@@ -474,7 +477,7 @@ class MainWindow(QMainWindow):
 
         if tunnel_status == "on":
             self._tray.setToolTip("USB Desktop Extend — Connected")
-            self._footer.setText("Connected. Drag windows between screens freely.")
+            self._footer.setText("Tunnel Connected. Connect with your RDP app on the tablet.")
             self._footer.setStyleSheet(f"color: {C['green']}; font-size: 11px; padding: 4px 0;")
         else:
             self._tray.setToolTip("USB Desktop Extend")
@@ -500,6 +503,19 @@ class MainWindow(QMainWindow):
             )
             self._footer.setText("Connection failed. See log above.")
             self._footer.setStyleSheet(f"color: {C['red']}; font-size: 11px; padding: 4px 0;")
+
+    @pyqtSlot(str)
+    def _on_connection_lost(self, reason: str):
+        self._connected = False
+        self._set_buttons_enabled(connected=False)
+        self._footer.setText(f"Connection lost: {reason}")
+        self._footer.setStyleSheet(f"color: {C['red']}; font-size: 11px; padding: 4px 0;")
+        self._tray.showMessage(
+            "USB Desktop Extend",
+            f"Connection lost: {reason}",
+            QSystemTrayIcon.MessageIcon.Warning,
+            5000,
+        )
 
     def _set_buttons_enabled(self, connected: bool):
         self._connect_btn.setEnabled(not connected)
@@ -535,6 +551,7 @@ class MainWindow(QMainWindow):
         self._manager.log_message.connect(self._on_backend_log)
         self._manager.status_changed.connect(self._on_status_changed)
         self._manager.finished.connect(self._on_finished)
+        self._manager.connection_lost.connect(self._on_connection_lost)
         self._manager.start()
 
     def _on_disconnect(self):
@@ -598,11 +615,38 @@ class MainWindow(QMainWindow):
         QApplication.quit()
 
     def closeEvent(self, event):
-        event.ignore()
-        self.hide()
-        self._tray.showMessage(
-            "USB Desktop Extend",
-            "Minimized to tray. Right-click to quit.",
-            QSystemTrayIcon.MessageIcon.Information,
-            2000,
-        )
+        if self._connected:
+            msg = QMessageBox(self)
+            msg.setWindowTitle("USB Desktop Extend")
+            msg.setText("Connection is active.")
+            msg.setInformativeText("What would you like to do?")
+            msg.setIcon(QMessageBox.Icon.Question)
+            quit_btn = msg.addButton("Disconnect && Quit", QMessageBox.ButtonRole.AcceptRole)
+            minimize_btn = msg.addButton("Minimize to Tray", QMessageBox.ButtonRole.RejectRole)
+            msg.addButton(QMessageBox.StandardButton.Cancel)
+            msg.exec()
+
+            clicked = msg.clickedButton()
+            if clicked == quit_btn:
+                self._on_disconnect()
+                event.accept()
+            elif clicked == minimize_btn:
+                event.ignore()
+                self.hide()
+                self._tray.showMessage(
+                    "USB Desktop Extend",
+                    "Minimized to tray. Right-click to quit.",
+                    QSystemTrayIcon.MessageIcon.Information,
+                    2000,
+                )
+            else:
+                event.ignore()
+        else:
+            event.ignore()
+            self.hide()
+            self._tray.showMessage(
+                "USB Desktop Extend",
+                "Minimized to tray. Right-click to quit.",
+                QSystemTrayIcon.MessageIcon.Information,
+                2000,
+            )
