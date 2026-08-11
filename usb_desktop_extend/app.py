@@ -20,7 +20,6 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
     QSystemTrayIcon,
     QTextEdit,
-    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -276,7 +275,6 @@ class MainWindow(QMainWindow):
         self._connected = False
 
         self.setStyleSheet(STYLESHEET)
-        QToolTip.setShowDelay(100)
         self._setup_ui()
         self._setup_tray()
         self._setup_logging()
